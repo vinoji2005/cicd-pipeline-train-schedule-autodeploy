@@ -1,79 +1,48 @@
 pipeline {
     agent any
+
     environment {
-        //be sure to replace "bhavukm" with your own Docker Hub username
-        DOCKER_IMAGE_NAME = "bhavukm/train-schedule"
+        DOCKERHUB_CREDENTIALS = credentials('docker-hub-credentials')
     }
+
     stages {
-        stage('Build') {
+        stage('Clone Repository') {
             steps {
-                echo 'Running build automation'
-                sh './gradlew build --no-daemon'
-                archiveArtifacts artifacts: 'dist/trainSchedule.zip'
+                git 'https://github.com/vinoji2005/cicd-pipeline-train-schedule-autodeploy.git'
             }
         }
-        stage('Build Docker Image') {
-            when {
-                branch 'master'
+        stage('Build PHP Application') {
+            steps {
+                sh 'mvn clean install'
             }
+        }
+        stage('Docker Build') {
             steps {
                 script {
-                    app = docker.build(DOCKER_IMAGE_NAME)
-                    app.inside {
-                        sh 'echo Hello, World!'
+                    docker.build("vinoji2005/train-schedule:${env.BUILD_ID}")
+                }
+            }
+        }
+        stage('Push to Docker Hub') {
+            steps {
+                script {
+                    docker.withRegistry('https://index.docker.io/v1/', DOCKERHUB_CREDENTIALS) {
+                        docker.image("vinoji2005/train-schedule:${env.BUILD_ID}").push()
                     }
                 }
             }
         }
-        stage('Push Docker Image') {
-            when {
-                branch 'master'
-            }
+        stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    docker.withRegistry('https://registry.hub.docker.com', 'docker_hub_login') {
-                        app.push("${env.BUILD_NUMBER}")
-                        app.push("latest")
-                    }
+                    sh 'kubectl apply -f k8s/deployment.yaml'
                 }
             }
         }
-        stage('CanaryDeploy') {
-            when {
-                branch 'master'
-            }
-            environment { 
-                CANARY_REPLICAS = 1
-            }
-            steps {
-                kubernetesDeploy(
-                    kubeconfigId: 'kubeconfig',
-                    configs: 'train-schedule-kube-canary.yml',
-                    enableConfigSubstitution: true
-                )
-            }
-        }
-        stage('DeployToProduction') {
-            when {
-                branch 'master'
-            }
-            environment { 
-                CANARY_REPLICAS = 0
-            }
-            steps {
-                input 'Deploy to Production?'
-                milestone(1)
-                kubernetesDeploy(
-                    kubeconfigId: 'kubeconfig',
-                    configs: 'train-schedule-kube-canary.yml',
-                    enableConfigSubstitution: true
-                )
-                kubernetesDeploy(
-                    kubeconfigId: 'kubeconfig',
-                    configs: 'train-schedule-kube.yml',
-                    enableConfigSubstitution: true
-                )
-            }
+    }
+    post {
+        always {
+            cleanWs()
         }
     }
 }
