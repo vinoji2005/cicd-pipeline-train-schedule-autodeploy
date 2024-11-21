@@ -1,41 +1,38 @@
 pipeline {
     agent any
-
     environment {
-        DOCKERHUB_CREDENTIALS = credentials('docker-hub-credentials')
+        CONTROL_PLANE_IPS = '192.168.56.11 192.168.56.12 192.168.56.13'  // Control plane IPs
+        SSH_USER = 'vagrant'
+        SSH_KEY_PATH = '/var/lib/jenkins/.ssh/id_rsa'
+        DOCKER_IMAGE = 'vinoji2005/train-schedule-app'
     }
-
     stages {
         stage('Clone Repository') {
             steps {
-                git 'https://github.com/vinoji2005/cicd-pipeline-train-schedule-autodeploy.git'
+                git branch: 'main', url: 'https://github.com/vinoji2005/cicd-pipeline-train-schedule-autodeploy.git'
             }
         }
-        stage('Build PHP Application') {
+        stage('Build Docker Image') {
             steps {
-                sh 'mvn clean install'
+                sh 'docker build -t $DOCKER_IMAGE .'
             }
         }
-        stage('Docker Build') {
+        stage('Push Docker Image') {
             steps {
-                script {
-                    docker.build("vinoji2005/train-schedule:${env.BUILD_ID}")
-                }
-            }
-        }
-        stage('Push to Docker Hub') {
-            steps {
-                script {
-                    docker.withRegistry('https://index.docker.io/v1/', DOCKERHUB_CREDENTIALS) {
-                        docker.image("vinoji2005/train-schedule:${env.BUILD_ID}").push()
-                    }
+                withDockerRegistry([credentialsId: 'dockerhub-credentials', url: '']) {
+                    sh 'docker push $DOCKER_IMAGE'
                 }
             }
         }
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    sh 'kubectl apply -f k8s/deployment.yaml'
+                    CONTROL_PLANE_IPS.split(' ').each { ip ->
+                        sh """
+                        ssh -i $SSH_KEY_PATH $SSH_USER@$ip 'kubectl apply -f deployment.yaml'
+                        ssh -i $SSH_KEY_PATH $SSH_USER@$ip 'kubectl apply -f service.yaml'
+                        """
+                    }
                 }
             }
         }
@@ -46,3 +43,4 @@ pipeline {
         }
     }
 }
+
